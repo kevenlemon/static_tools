@@ -1,0 +1,82 @@
+name: Build portable MySQL clients
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "build/mysql-client/**"
+      - ".github/workflows/build-mysql-clients.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            platform: linux/amd64
+            image: quay.io/pypa/manylinux2014_x86_64
+          - arch: aarch64
+            platform: linux/arm64
+            image: quay.io/pypa/manylinux2014_aarch64
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Enable non-native architecture
+        if: matrix.platform == 'linux/arm64'
+        uses: docker/setup-qemu-action@v4
+        with:
+          platforms: arm64
+
+      - name: Build clients
+        run: |
+          docker run --rm \
+            --platform "${{ matrix.platform }}" \
+            -e TARGET_ARCH="${{ matrix.arch }}" \
+            -e JOBS=2 \
+            -v "$GITHUB_WORKSPACE:/workspace" \
+            -w /workspace \
+            "${{ matrix.image }}" \
+            bash /workspace/build/mysql-client/build.sh
+
+      - name: Test on mainstream glibc distributions
+        env:
+          TARGET_PLATFORM: ${{ matrix.platform }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          binary="$GITHUB_WORKSPACE/dist/$TARGET_ARCH/mysql_linux_glibc_$TARGET_ARCH"
+          images=(
+            ubuntu:20.04
+            ubuntu:24.04
+            debian:11-slim
+            debian:12-slim
+            rockylinux:8-minimal
+            rockylinux:9-minimal
+            amazonlinux:2
+            amazonlinux:2023
+            opensuse/leap:15.6
+          )
+
+          for image in "${images[@]}"; do
+            docker run --rm \
+              --platform "$TARGET_PLATFORM" \
+              -v "$binary:/mysql:ro" \
+              "$image" \
+              /mysql --version
+          done
+
+      - name: Upload clients
+        uses: actions/upload-artifact@v4
+        with:
+          name: mysql-5.7.44-linux-glibc-${{ matrix.arch }}
+          path: dist/${{ matrix.arch }}/
+          if-no-files-found: error
+          retention-days: 30
