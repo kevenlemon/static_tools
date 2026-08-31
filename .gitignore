@@ -1,1 +1,3 @@
 .git/*
+mongosh_x86_64
+mongosh_aarch64
